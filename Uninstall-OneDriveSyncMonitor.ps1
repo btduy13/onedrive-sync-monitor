@@ -12,8 +12,11 @@ Write-Host "Removed scheduled task: $taskName"
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 if (Test-Path -LiteralPath $runKey) {
     Remove-ItemProperty -LiteralPath $runKey -Name 'OneDriveSyncMonitor' -ErrorAction SilentlyContinue
+    Remove-ItemProperty -LiteralPath $runKey -Name 'OneDriveCloudBackup' -ErrorAction SilentlyContinue
     Write-Host 'Removed current-user Startup entry (if present).'
 }
+$cloudStopPath = Join-Path $InstallPath 'cloud-backup.stop'
+if (Test-Path -LiteralPath $InstallPath) { Set-Content -LiteralPath $cloudStopPath -Value 'disabled' -Encoding ASCII }
 
 if ($RemoveFiles) {
     if ([string]::IsNullOrWhiteSpace($InstallPath) -or $InstallPath -eq $env:LOCALAPPDATA -or $InstallPath -eq 'C:\') {

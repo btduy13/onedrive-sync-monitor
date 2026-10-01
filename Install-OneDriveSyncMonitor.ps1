@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 $taskName = 'OneDrive Sync Monitor'
 $sourceScript = Join-Path $PSScriptRoot 'OneDriveSyncMonitor.ps1'
 $sourceUpdater = Join-Path $PSScriptRoot 'Update-OneDriveSyncMonitor.ps1'
+$sourceCloudBackup = Join-Path $PSScriptRoot 'OneDriveCloudBackup.ps1'
 $sourceVersion = Join-Path $PSScriptRoot 'version.json'
 
 if (-not (Test-Path -LiteralPath $sourceScript)) {
@@ -23,6 +24,9 @@ if (-not (Test-Path -LiteralPath $sourceScript)) {
 }
 if (-not (Test-Path -LiteralPath $sourceUpdater)) {
     throw "Cannot find $sourceUpdater"
+}
+if (-not (Test-Path -LiteralPath $sourceCloudBackup)) {
+    throw "Cannot find $sourceCloudBackup"
 }
 if (-not (Test-Path -LiteralPath $sourceVersion)) {
     throw "Cannot find $sourceVersion"
@@ -35,6 +39,7 @@ $versionPath = Join-Path $InstallPath 'version.json'
 $configPath = Join-Path $InstallPath 'config.json'
 Copy-Item -LiteralPath $sourceScript -Destination $monitorScript -Force
 Copy-Item -LiteralPath $sourceUpdater -Destination $updaterScript -Force
+Copy-Item -LiteralPath $sourceCloudBackup -Destination (Join-Path $InstallPath 'OneDriveCloudBackup.ps1') -Force
 Copy-Item -LiteralPath $sourceVersion -Destination $versionPath -Force
 
 $existing = $null

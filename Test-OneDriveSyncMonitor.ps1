@@ -8,15 +8,17 @@ New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $testDirectory = Join-Path $testRoot ('OneDriveSyncMonitor-Test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
 $testState = Join-Path $testDirectory 'state.json'
+$testCloudState = Join-Path $testDirectory 'cloud-state.json'
 $testLog = Join-Path $testDirectory 'monitor.log'
 
 try {
-    . $MonitorPath -LoadFunctionsOnly -ConfigPath (Join-Path $testDirectory 'config.json') -StatePath $testState -LogPath $testLog -WebhookUrl 'http://localhost/test' -StallMinutes 1
+    . $MonitorPath -LoadFunctionsOnly -ConfigPath (Join-Path $testDirectory 'config.json') -StatePath $testState -CloudStatePath $testCloudState -LogPath $testLog -WebhookUrl 'http://localhost/test' -StallMinutes 1
 
     $script:FixtureFailedUploads = 0
     $script:FixturePendingChanges = 0
     $script:FixtureProcessPresent = $true
     $script:WebhookFail = $false
+    $script:CloudRunEnabled = $false
     $script:Payloads = @()
 
     function Get-Process {
@@ -26,6 +28,13 @@ try {
     }
     function Get-OneDriveAccounts {
         return [pscustomobject]@{ Name = 'Business1'; Root = 'C:\TestOneDrive'; Properties = $null }
+    }
+    function Get-ItemProperty {
+        param([string]$Path, [string]$Name, [string]$ErrorAction)
+        if ($script:CloudRunEnabled -and $Name -eq 'OneDriveCloudBackup') {
+            return [pscustomobject]@{ OneDriveCloudBackup = 'enabled' }
+        }
+        return $null
     }
     function Get-AccountSnapshot {
         param($Account)
@@ -121,6 +130,15 @@ try {
     $state = Get-Content -LiteralPath $testState -Raw | ConvertFrom-Json
     Assert-Test ($state.PendingAlert -eq $false -and $script:Payloads.Count -eq ($payloadCountBeforeRetry + 2)) 'Queued alerts retry after connectivity returns'
     Assert-Test ($script:Payloads[-2].status -eq 'Warning' -and $script:Payloads[-1].status -eq 'Healthy') 'Original failure arrives before recovery'
+
+    $script:CloudRunEnabled = $true
+    @{ LastCycleUtc = [DateTime]::UtcNow.AddMinutes(-20).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $testCloudState -Encoding UTF8
+    $result = Invoke-OneDriveCheck
+    Assert-Test (@($result.Issues | Where-Object { $_.Code -eq 'CloudBackup.Stalled' }).Count -eq 1) 'Stalled cloud backup triggers an IT warning'
+
+    @{ LastCycleUtc = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $testCloudState -Encoding UTF8
+    $result = Invoke-OneDriveCheck
+    Assert-Test ($result.Status -eq 'Healthy') 'Fresh cloud backup heartbeat clears the warning'
 
     Write-Host 'All OneDrive monitor tests passed.'
 }

@@ -7,6 +7,7 @@ param(
     [int]$DiagnosticsStaleMinutes = 30,
     [string]$LogPath = '',
     [string]$StatePath = '',
+    [string]$CloudStatePath = '',
     [string]$WebhookUrl = '',
     [switch]$Once,
     [switch]$LoadFunctionsOnly,
@@ -15,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:MonitorName = 'OneDriveSyncMonitor'
-$script:MonitorVersion = '1.0.4'
+$script:MonitorVersion = '1.1.0'
 $script:DefaultRepository = 'btduy13/onedrive-sync-monitor'
 $script:LastUpdateCheckUtc = [DateTime]::MinValue
 
@@ -24,6 +25,9 @@ if ([string]::IsNullOrWhiteSpace($LogPath)) {
 }
 if ([string]::IsNullOrWhiteSpace($StatePath)) {
     $StatePath = Join-Path $env:LOCALAPPDATA 'OneDriveSyncMonitor\state.json'
+}
+if ([string]::IsNullOrWhiteSpace($CloudStatePath)) {
+    $CloudStatePath = Join-Path $env:LOCALAPPDATA 'OneDriveSyncMonitor\cloud-backup-state.json'
 }
 if ($IntervalSeconds -lt 15) { $IntervalSeconds = 15 }
 if ($StallMinutes -lt 1) { $StallMinutes = 1 }
@@ -599,6 +603,23 @@ function Invoke-OneDriveCheck {
         $previousSnapshot = Get-PreviousAccount -State $state -Name $snapshot.Name
         Add-AccountIssues -Snapshot $snapshot -PreviousSnapshot $previousSnapshot -StaleMinutes $config.DiagnosticsStaleMinutes -StallMinutes $config.StallMinutes -Issues ([ref]$issues)
         $accountSnapshots += $snapshot
+    }
+
+    $cloudRunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $cloudRun = Get-ItemProperty -Path $cloudRunKey -Name 'OneDriveCloudBackup' -ErrorAction SilentlyContinue
+    if ($null -ne $cloudRun -and $cloudRun.OneDriveCloudBackup) {
+        try {
+            if (-not (Test-Path -LiteralPath $CloudStatePath)) { throw 'Cloud backup state is missing.' }
+            $cloudState = Get-Content -LiteralPath $CloudStatePath -Raw | ConvertFrom-Json
+            $lastCycle = [DateTime]::MinValue
+            if (-not [DateTime]::TryParse([string]$cloudState.LastCycleUtc, [ref]$lastCycle) -or
+                ([DateTime]::UtcNow - $lastCycle.ToUniversalTime()).TotalMinutes -gt 15) {
+                throw 'Cloud backup has not completed a monitor cycle in 15 minutes.'
+            }
+        }
+        catch {
+            $issues += New-MonitorIssue -Code 'CloudBackup.Stalled' -Severity Warning -Message $_.Exception.Message
+        }
     }
 
     $status = Get-HealthStatus -Issues $issues

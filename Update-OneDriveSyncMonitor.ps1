@@ -12,11 +12,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $updateFiles = @(
     'OneDriveSyncMonitor.ps1',
+    'OneDriveCloudBackup.ps1',
     'Update-OneDriveSyncMonitor.ps1',
     'Install-OneDriveSyncMonitor.ps1',
     'Uninstall-OneDriveSyncMonitor.ps1',
     'Setup-OneDriveSyncMonitor.cmd',
     'Test-OneDriveSyncMonitor.ps1',
+    'Test-OneDriveCloudBackup.ps1',
+    'Test-OneDriveCloudBackup-Live.ps1',
+    'Test-OneDriveCloudWatcher-Live.ps1',
     'README-OneDriveSyncMonitor-vi.md',
     'version.json'
 )

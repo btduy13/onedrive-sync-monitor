@@ -65,6 +65,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OneDr
 
 Thông báo có chữ `TEST ONLY` và tên máy. Kiểm tra cả channel Teams, hộp thư `it@aspectengineering.com.au` và lịch sử chạy flow. `-TestAlert` không đổi trạng thái OneDrive thật. Nếu không thấy mail, kiểm tra hành động **Send an email (V2)** trong flow; trường `recipient` trong JSON không tự gửi email.
 
+## Sao lưu trực tiếp lên OneDrive khi ứng dụng sync lỗi
+
+`OneDriveCloudBackup.ps1` đọc file đã có nội dung trên máy và tải trực tiếp lên OneDrive công ty qua Microsoft Graph. Đường dẫn tương đối dưới thư mục OneDrive local được giữ nguyên trên cloud. Tool nhận sự kiện lưu file, lưu hàng đợi trên đĩa và thử lại khi mạng hoạt động; nó không xóa file trên cloud. File chỉ có nội dung online (Files On-Demand) bị bỏ qua để không cố tải nội dung khi ứng dụng OneDrive đang lỗi. Nếu Windows báo watcher mất sự kiện, tool cảnh báo IT để kiểm tra bù.
+
+Chế độ này cần đăng nhập tài khoản Microsoft 365 một lần với quyền Graph `Files.ReadWrite`. Chạy trên máy đã cài monitor:
+
+```powershell
+powershell.exe -NoProfile -Command "Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OneDriveSyncMonitor\OneDriveCloudBackup.ps1" -Setup
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OneDriveSyncMonitor\OneDriveCloudBackup.ps1" -Once -RelativePath 'Documents\example.docx'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OneDriveSyncMonitor\OneDriveCloudBackup.ps1" -Enable
+```
+
+Lệnh `-Setup` lấy thư mục Business1, tenant và email từ cấu hình OneDrive của Windows, yêu cầu đăng nhập đúng tài khoản đó rồi xác nhận drive cloud. `-Once -RelativePath` thử riêng một file; `-Enable` theo dõi các lần lưu tiếp theo mà không tải hàng loạt file cũ. Sau khi bạn lưu thay đổi mới, tool tải lên đúng đường dẫn nếu phiên bản cloud chưa bị người khác sửa. Nếu phát hiện xung đột hoặc tải lên thất bại, tool giữ file local, báo Teams/email IT qua webhook monitor và thử lại ở vòng sau. Tool chạy khi user Windows đăng nhập và tự nạp script mới sau cập nhật release.
+
+Nếu cần kiểm kê hoặc tải bù file có từ trước, IT có thể dùng `-Once -BaselineAll` hoặc `-Once -BaselineAll -Backfill`. Thư mục lớn có thể cần rất nhiều lệnh Graph và thời gian dài; nên kiểm tra phạm vi trước khi chạy. OneDrive/SharePoint library được sync ngoài thư mục Business1 hiện chưa nằm trong phạm vi này.
+
+Trạng thái cloud backup nằm ở `%LOCALAPPDATA%\OneDriveSyncMonitor\cloud-backup-state.json`; log ở `cloud-backup.log`. Không xóa file trạng thái khi đang dùng: nó giữ mốc phiên bản cloud để tránh ghi đè thay đổi của người khác. Chế độ này là tải lên một chiều; việc xóa, đổi tên, tải xuống và hòa giải xung đột cần xử lý riêng. Nếu `-Once` báo lỗi, chưa chạy `-Enable`. Muốn dừng, chạy script với `-Disable`.
+
 ## Gỡ cài đặt
 
 ```powershell
