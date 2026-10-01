@@ -35,7 +35,7 @@ function Test-SafeZipEntry {
     param([Parameter(Mandatory = $true)][string]$EntryName)
     $normalized = $EntryName.Replace('/', '\')
     if ([string]::IsNullOrWhiteSpace($normalized) -or [IO.Path]::IsPathRooted($normalized)) { return $false }
-    if ($normalized -match '(^|\)\.\.?($|\)') { return $false }
+    if ($normalized -match '(^|[\\])\.\.?($|[\\])') { return $false }
     return $true
 }
 
