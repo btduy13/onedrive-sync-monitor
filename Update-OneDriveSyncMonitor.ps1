@@ -48,6 +48,16 @@ function Get-ValidatedDownloadUri {
     return $parsed
 }
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $algorithm.ComputeHash([IO.File]::ReadAllBytes($Path))
+        return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally { $algorithm.Dispose() }
+}
+
 function Remove-SafeStage {
     if ($null -eq $stagePath -or -not (Test-Path -LiteralPath $stagePath)) { return }
     $resolvedInstall = (Resolve-Path -LiteralPath $InstallPath).Path.TrimEnd('\')
@@ -68,7 +78,7 @@ try {
     New-Item -ItemType Directory -Path $stagePath -Force | Out-Null
     $zipPath = Join-Path $stagePath 'release.zip'
     Invoke-WebRequest -Uri $downloadUri -Headers @{ 'User-Agent' = 'OneDriveSyncMonitor updater' } -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
-    $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
+    $actualHash = Get-Sha256Hex -Path $zipPath
     if ($actualHash -ine $ExpectedSha256) {
         throw "Release checksum mismatch. Expected $ExpectedSha256, received $actualHash."
     }
