@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:MonitorName = 'OneDriveSyncMonitor'
-$script:MonitorVersion = '1.0.1'
+$script:MonitorVersion = '1.0.2'
 $script:DefaultRepository = 'btduy13/onedrive-sync-monitor'
 $script:LastUpdateCheckUtc = [DateTime]::MinValue
 
@@ -155,7 +155,13 @@ function Start-ReleaseUpdate {
     }
 
     $checksumResponse = Invoke-WebRequest -Uri ([string]$checksumAsset.browser_download_url) -Headers @{ 'User-Agent' = $script:MonitorName } -UseBasicParsing -TimeoutSec 15
-    $expectedHashMatch = [regex]::Match([string]$checksumResponse.Content, '(?i)\b[0-9a-f]{64}\b')
+    $checksumText = if ($checksumResponse.Content -is [byte[]]) {
+        [Text.Encoding]::UTF8.GetString($checksumResponse.Content)
+    }
+    else {
+        [string]$checksumResponse.Content
+    }
+    $expectedHashMatch = [regex]::Match($checksumText, '(?i)\b[0-9a-f]{64}\b')
     if (-not $expectedHashMatch.Success) { throw 'Latest release checksum is invalid or missing.' }
 
     $updater = Join-Path $PSScriptRoot 'Update-OneDriveSyncMonitor.ps1'
