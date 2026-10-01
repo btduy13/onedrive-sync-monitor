@@ -64,7 +64,7 @@ try {
     $downloadUri = Get-ValidatedDownloadUri -Uri $DownloadUrl
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-    $stagePath = Join-Path (Split-Path -Parent $resolvedInstallPath) ('.OneDriveSyncMonitor-update-' + [guid]::NewGuid().ToString('N'))
+    $stagePath = Join-Path $resolvedInstallPath ('.OneDriveSyncMonitor-update-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagePath -Force | Out-Null
     $zipPath = Join-Path $stagePath 'release.zip'
     Invoke-WebRequest -Uri $downloadUri -Headers @{ 'User-Agent' = 'OneDriveSyncMonitor updater' } -OutFile $zipPath -UseBasicParsing -TimeoutSec 60

@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:MonitorName = 'OneDriveSyncMonitor'
-$script:MonitorVersion = '1.0.0'
+$script:MonitorVersion = '1.0.1'
 $script:DefaultRepository = 'btduy13/onedrive-sync-monitor'
 $script:LastUpdateCheckUtc = [DateTime]::MinValue
 
