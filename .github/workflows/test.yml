@@ -26,3 +26,7 @@ jobs:
             if ($errors.Count -gt 0) { $errors | Format-List; throw "PowerShell parse failed: $file" }
           }
           .\Test-OneDriveSyncMonitor.ps1
+          .\Test-MultiLibrarySync.ps1
+          .\Test-MultiLibraryRecovery.ps1
+          .\Test-BidirectionalRepair.ps1
+          .\Test-UiActions.ps1

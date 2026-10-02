@@ -691,7 +691,7 @@ function Invoke-OneDriveCheck {
             $lastMulti = [DateTime]::MinValue
             if (-not [DateTime]::TryParse([string]$multiStatus.CheckedUtc,[ref]$lastMulti) -or ([DateTime]::UtcNow-$lastMulti.ToUniversalTime()).TotalMinutes -gt 15) { throw 'Multi-library supervisor has no recent completed cycle.' }
             foreach ($library in @($multiStatus.Libraries)) {
-                if ($library.Status -ne 'Monitoring') {
+                if ($library.Status -notin @('Monitoring','Scanning')) {
                     $issues += New-MonitorIssue -Code ('Library.'+[string]$library.Status) -Severity Warning -Account ([string]$library.Name) -Message ('Library needs attention: '+[string]$library.Status)
                 }
             }
@@ -838,6 +838,79 @@ function Invoke-SafeOneDriveRecovery {
     Write-MonitorLog 'RECOVERY skipped: no trusted Microsoft-signed OneDrive executable found.'
 }
 
+function Get-MultiLibraryRecoveryDecision {
+    param(
+        [bool]$SafeRecoveryEnabled,
+        [string]$RegisteredCommand,
+        [string]$ExpectedCommand,
+        [bool]$StopRequested,
+        [bool]$SupervisorRunning,
+        [string]$LastAttemptUtc,
+        [DateTime]$NowUtc = [DateTime]::UtcNow
+    )
+    if (-not $SafeRecoveryEnabled) { return 'Disabled' }
+    if ([string]::IsNullOrWhiteSpace($RegisteredCommand)) { return 'NotEnabled' }
+    if (-not [string]::Equals($RegisteredCommand, $ExpectedCommand, [StringComparison]::OrdinalIgnoreCase)) { return 'UnexpectedStartupCommand' }
+    if ($StopRequested) { return 'Stopping' }
+    if ($SupervisorRunning) { return 'Running' }
+    if ($LastAttemptUtc) {
+        $last = [DateTime]::MinValue
+        if (-not [DateTime]::TryParse($LastAttemptUtc, [ref]$last)) { return 'InvalidRecoveryState' }
+        if (($NowUtc - $last.ToUniversalTime()).TotalMinutes -lt 5) { return 'Cooldown' }
+    }
+    return 'Restart'
+}
+
+function Invoke-SafeMultiLibraryRecovery {
+    param($Config, [string]$InstallPath = $PSScriptRoot,
+        [string]$DataRoot = (Join-Path (Split-Path -Parent $CloudStatePath) 'libraries'),
+        [string]$MutexName = '')
+    $scriptPath = Join-Path $InstallPath 'MultiLibrarySync.ps1'
+    $exe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $scriptPath + '" -DataRoot "' + $DataRoot + '"'
+    $expected = '"' + $exe + '" ' + $arguments
+    $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OneDriveMultiLibrarySync -ErrorAction SilentlyContinue
+    $registered = if ($run) { [string]$run.OneDriveMultiLibrarySync } else { '' }
+    $stop = Join-Path $DataRoot 'supervisor.stop'
+    $recoveryPath = Join-Path $DataRoot 'supervisor-recovery.json'
+    $lastAttempt = ''
+    if (Test-Path -LiteralPath $recoveryPath -PathType Leaf) {
+        try { $lastAttempt = [string](Get-Content -LiteralPath $recoveryPath -Raw -ErrorAction Stop | ConvertFrom-Json).LastAttemptUtc }
+        catch { Write-MonitorLog 'WARN multi-library recovery state is unreadable; automatic restart skipped.'; return }
+    }
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { return }
+    $precheck = Get-MultiLibraryRecoveryDecision -SafeRecoveryEnabled ([bool]$Config.SafeRecoveryEnabled) `
+        -RegisteredCommand $registered -ExpectedCommand $expected -StopRequested (Test-Path -LiteralPath $stop) `
+        -SupervisorRunning $false -LastAttemptUtc $lastAttempt
+    if ($precheck -ne 'Restart') {
+        if ($precheck -eq 'UnexpectedStartupCommand') { Write-MonitorLog 'WARN multi-library startup command is unexpected; automatic restart skipped.' }
+        return
+    }
+    if (-not $MutexName) { $MutexName = 'Local\OneDriveMultiLibrarySync-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
+    $mutex = New-Object Threading.Mutex($false, $MutexName)
+    try {
+        $acquired = $false
+        try { $acquired = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { return }
+        # Recheck after taking the supervisor mutex so an intentional pause cannot race a restart.
+        $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OneDriveMultiLibrarySync -ErrorAction SilentlyContinue
+        $registered = if ($run) { [string]$run.OneDriveMultiLibrarySync } else { '' }
+        $decision = Get-MultiLibraryRecoveryDecision -SafeRecoveryEnabled ([bool]$Config.SafeRecoveryEnabled) `
+            -RegisteredCommand $registered -ExpectedCommand $expected -StopRequested (Test-Path -LiteralPath $stop) `
+            -SupervisorRunning $false -LastAttemptUtc $lastAttempt
+        if ($decision -ne 'Restart') { return }
+        New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null
+        @{LastAttemptUtc=[DateTime]::UtcNow.ToString('o');Action='StartMissingSupervisor'} |
+            ConvertTo-Json | Set-Content -LiteralPath $recoveryPath -Encoding UTF8
+        Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -ErrorAction Stop | Out-Null
+        Write-MonitorLog 'RECOVERY started missing multi-library supervisor; cooldown 5 minutes.'
+    }
+    finally {
+        if ($acquired) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
+}
+
 if ($LoadFunctionsOnly) { return }
 
 if ($TestAlert) {
@@ -874,8 +947,10 @@ if ($Once) {
 while ($true) {
     try {
         $check = Invoke-OneDriveCheck
-        Invoke-SafeOneDriveRecovery -Result $check -Config (Get-MonitorConfig)
-        if (Invoke-SelfUpdateCheck -Config (Get-MonitorConfig)) { break }
+        $currentConfig = Get-MonitorConfig
+        Invoke-SafeOneDriveRecovery -Result $check -Config $currentConfig
+        Invoke-SafeMultiLibraryRecovery -Config $currentConfig
+        if (Invoke-SelfUpdateCheck -Config $currentConfig) { break }
     }
     catch {
         Write-MonitorLog "ERROR monitor cycle failed: $($_.Exception.Message)"

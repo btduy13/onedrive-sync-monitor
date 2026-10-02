@@ -1,6 +1,9 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'MultiLibrarySync.ps1') -LoadFunctionsOnly
 function Assert-Multi($Ok,$Text){if(-not $Ok){throw "FAIL: $Text"}; Write-Host "PASS: $Text"}
+Assert-Multi ((Get-LibraryWorkStatus -ErrorCount 0 -Pending 0 -Tracked 0 -ScanRemainingFolders 5) -eq 'Scanning') 'An unfinished initial scan is not mislabeled as missing baseline'
+Assert-Multi ((Get-LibraryWorkStatus -ErrorCount 0 -Pending 0 -Tracked 0 -ScanRemainingFolders 0) -eq 'BaselineRequired') 'No scanned file after a completed pass still needs a baseline'
+Assert-Multi ((Get-LibraryWorkStatus -ErrorCount 1 -Pending 3 -Tracked 0 -ScanRemainingFolders 5) -eq 'NeedsReview') 'A real file error takes priority over scan progress'
 function Test-CompanyBackupSafePath {param($Path,$AccountRoots) return $true}
 $tenant='11111111-1111-1111-1111-111111111111'
 $e=[pscustomobject]@{Accounts=@([pscustomobject]@{TenantId=$tenant;Account='a@test';UserFolder='C:\Company';Scopes=@{a='C:\Projects';b='D:\Estimate'}});Providers=@(
@@ -52,7 +55,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $localRoot 'event.txt'),'new')
         $deadline=[datetime]::UtcNow.AddSeconds(3)
         do{Start-Sleep -Milliseconds 100;Add-LibraryFileEvents -Root $testRoot -Watchers $watchers;$queued=@((Read-CloudState -Path (Join-Path $testRoot "$watchId\state.json")).PendingPaths)}while('event.txt' -notin $queued -and [datetime]::UtcNow -lt $deadline)
-        Assert-Multi ('event.txt' -in $queued) 'FileSystemWatcher queues a changed path for only its library'
+        Assert-Multi ($queued.Count -gt 0 -and $queued[0] -eq 'event.txt') 'New file event moves to the front of its library queue'
     }finally{
         foreach($kind in @('Changed','Created','Deleted','Renamed','Error')){Unregister-Event -SourceIdentifier "OneDriveMultiLibrarySync.$watchId.$kind" -ErrorAction SilentlyContinue}
         $watchers[$watchId].Watcher.Dispose()

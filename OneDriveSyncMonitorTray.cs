@@ -378,6 +378,7 @@ internal sealed partial class DashboardForm : Form
         {
             case "Monitoring": return "Đang theo dõi";
             case "Pending": return "Đang chờ";
+            case "Scanning": return "Đang quét ban đầu";
             case "BaselineRequired": return "Cần mốc đồng bộ";
             case "NeedsReview": return "Cần xử lý";
             case "Blocked": return "Bị chặn";
@@ -408,7 +409,10 @@ internal sealed partial class DashboardForm : Form
         var path = roots.ContainsKey(id) ? roots[id] : "";
         var url = urls.ContainsKey(id) ? urls[id] : "";
         var error = errors.ContainsKey(id) ? errors[id] : "";
+        var libraryStatus = ReadJson(Path.Combine(installPath, "libraries", id, "status.json"));
+        int remaining = Count(libraryStatus, "ScanRemainingFolders");
         details.Text = "Máy: " + path + Environment.NewLine + "Cloud: " + url + Environment.NewLine +
+            (remaining > 0 ? "Quét ban đầu: còn " + remaining + " thư mục trong hàng quét." + Environment.NewLine : "") +
             (string.IsNullOrEmpty(error) ? "Lỗi: không có trong lần kiểm tra gần nhất." : "Lỗi: " + error);
     }
 
@@ -459,7 +463,7 @@ internal sealed partial class DashboardForm : Form
                 total++;
                 tracked += Count(row, "FilesTracked");
                 pending += Count(row, "Pending");
-                if (state != "Monitoring" || !string.IsNullOrEmpty(Value(row, "Error"))) attention++;
+                if ((state != "Monitoring" && state != "Scanning") || !string.IsNullOrEmpty(Value(row, "Error"))) attention++;
             }
             var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(statusPath);
             bool stale = age > TimeSpan.FromMinutes(5);

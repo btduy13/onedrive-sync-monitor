@@ -95,6 +95,15 @@ function Test-LibraryIgnoredPath {
     return ($leaf -ieq 'desktop.ini' -or $leaf -match '^\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 }
 
+function Get-LibraryWorkStatus {
+    param([int]$ErrorCount,[int]$Pending,[int]$Tracked,[int]$ScanRemainingFolders)
+    if($ErrorCount -gt 0){return 'NeedsReview'}
+    if($Pending -gt 0){return 'Pending'}
+    if($Tracked -gt 0){return 'Monitoring'}
+    if($ScanRemainingFolders -gt 0){return 'Scanning'}
+    return 'BaselineRequired'
+}
+
 function Get-LibraryLocalChangedPaths {
     param($Target,[string]$Folder,$State,[int]$MaxEntries=100,[int]$MaxSeconds=8)
     $scanFile=Join-Path $Folder 'scan.json'
@@ -175,7 +184,8 @@ function Add-LibraryFileEvents {
                     $relative=$full.Substring($source.Length).TrimStart('\')
                     if(-not $relative -or (Test-LibraryIgnoredPath $relative)){continue}
                     if((Test-Path -LiteralPath $full -PathType Container) -and -not $state.Files.ContainsKey($relative)){continue}
-                    $state.PendingPaths=@(@($state.PendingPaths)+@($relative)|Select-Object -Unique)
+                    # A newly saved file must not wait behind an old, large baseline queue.
+                    $state.PendingPaths=@(@($relative)+@($state.PendingPaths | Where-Object {$_ -ne $relative}))
                 }
             }
             Save-CloudState -State $state -Path $stateFile
@@ -187,7 +197,8 @@ function Invoke-LibraryCycle {
     param($Mapping,[string]$Root,[switch]$CheckWrite)
     $folder=Join-Path $Root $Mapping.Id
     $report=[ordered]@{Id=$Mapping.Id; Name=$Mapping.Name; SourceRoot=$Mapping.SourceRoot; LibraryWebUrl=$Mapping.LibraryWebUrl;
-        Status=$Mapping.Status; CheckedUtc=[DateTime]::UtcNow.ToString('o'); FilesTracked=0; Pending=0; Pushed=0; Pulled=0; Error=''}
+        Status=$Mapping.Status; CheckedUtc=[DateTime]::UtcNow.ToString('o'); FilesTracked=0; Pending=0;
+        ScanRemainingFolders=0; Pushed=0; Pulled=0; Error=''}
     try {
         if($Mapping.Status -ne 'Discovered'){ return [pscustomobject]$report }
         $target=Resolve-SyncLibrary $Mapping
@@ -238,8 +249,14 @@ function Invoke-LibraryCycle {
         if(-not $errors.Count){$state.LastSuccessfulCycleUtc=$state.LastCycleUtc}
         Save-CloudState $state
         $report.FilesTracked=$state.Files.Count; $report.Pending=@($state.PendingPaths).Count
+        $scanFile=Join-Path $folder 'scan.json'
+        if(Test-Path -LiteralPath $scanFile -PathType Leaf){
+            $scan=Get-Content -LiteralPath $scanFile -Raw | ConvertFrom-Json
+            $report.ScanRemainingFolders=@($scan.Queue).Count
+        }
         $report.Error=$state.LastFailure
-        $report.Status=if($errors.Count){'NeedsReview'}elseif($report.Pending){'Pending'}elseif($state.Files.Count -eq 0){'BaselineRequired'}else{'Monitoring'}
+        $report.Status=Get-LibraryWorkStatus -ErrorCount $errors.Count -Pending $report.Pending `
+            -Tracked $report.FilesTracked -ScanRemainingFolders $report.ScanRemainingFolders
     } catch { $report.Status='Blocked'; $report.Error=$_.Exception.Message }
     finally { Save-LibraryJson ([pscustomobject]$report) (Join-Path $folder 'status.json') }
     return [pscustomobject]$report
