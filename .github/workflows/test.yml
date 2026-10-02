@@ -28,5 +28,6 @@ jobs:
           .\Test-OneDriveSyncMonitor.ps1
           .\Test-MultiLibrarySync.ps1
           .\Test-MultiLibraryRecovery.ps1
+          .\Test-MultiLibrarySetup.ps1
           .\Test-BidirectionalRepair.ps1
           .\Test-UiActions.ps1
