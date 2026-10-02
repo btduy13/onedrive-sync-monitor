@@ -13,15 +13,28 @@ $ErrorActionPreference = 'Stop'
 $updateFiles = @(
     'OneDriveSyncMonitor.ps1',
     'OneDriveCloudBackup.ps1',
+    'MultiLibrarySync.ps1',
+    'Manage-OneDriveSyncMonitorUi.ps1',
+    'Find-CompanyBackupSource.ps1',
+    'New-CloudBackupCertificate.ps1',
+    'OneDriveSyncMonitorTray.exe',
     'Update-OneDriveSyncMonitor.ps1',
     'Install-OneDriveSyncMonitor.ps1',
     'Uninstall-OneDriveSyncMonitor.ps1',
+    'Manage-OneDriveSyncMonitorInstances.ps1',
+    'OneClick-Uninstall.cmd',
     'Setup-OneDriveSyncMonitor.cmd',
     'Test-OneDriveSyncMonitor.ps1',
     'Test-OneDriveCloudBackup.ps1',
+    'Test-CloudBackupCertificate.ps1',
+    'Test-OneDriveInstallLifecycle.ps1',
     'Test-OneDriveCloudBackup-Live.ps1',
     'Test-OneDriveCloudWatcher-Live.ps1',
     'README-OneDriveSyncMonitor-vi.md',
+    'OneClick-Setup.ps1',
+    'OneClick-Setup.cmd',
+    'Setup-MultiLibrarySync.cmd',
+    'Setup-MultiLibrarySync.ps1',
     'version.json'
 )
 $logPath = Join-Path $InstallPath 'monitor.log'
@@ -107,6 +120,17 @@ try {
         if (-not (Test-Path -LiteralPath $source)) { throw "Release is missing required file: $file" }
     }
 
+    $trayPath = Join-Path $resolvedInstallPath 'OneDriveSyncMonitorTray.exe'
+    $trayWasRunning = $false
+    $trayProcesses = @(Get-Process -Name 'OneDriveSyncMonitorTray' -ErrorAction SilentlyContinue | Where-Object {
+        try { $_.Path -ieq $trayPath } catch { $false }
+    })
+    if ($trayProcesses.Count -gt 0) {
+        $trayWasRunning = $true
+        $trayProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 300
+    }
+
     if ($MonitorPid -gt 0) {
         try { Wait-Process -Id $MonitorPid -Timeout 90 -ErrorAction Stop } catch { Write-UpdaterLog "monitor process $MonitorPid did not exit before timeout; continuing" }
     }
@@ -126,6 +150,9 @@ try {
         '-File', $monitorPath, '-ConfigPath', $configPath
     )
     Start-Process -FilePath $PowerShellPath -ArgumentList $restartArguments -WorkingDirectory $resolvedInstallPath -WindowStyle Hidden | Out-Null
+    if ($trayWasRunning -and (Test-Path -LiteralPath $trayPath)) {
+        Start-Process -FilePath $trayPath -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+    }
 }
 catch {
     Write-UpdaterLog "update failed: $($_.Exception.Message)"

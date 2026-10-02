@@ -18,7 +18,12 @@ try {
     $realConfig = Get-CloudConfig
     Connect-CloudGraph -Config $realConfig
     $testDriveId = [string]$realConfig.DriveId
-    $testConfig = [ordered]@{ SourceRoot = $source; DriveId = $testDriveId; Account = $realConfig.Account; TenantId = $realConfig.TenantId }
+    $testConfig = [ordered]@{
+        SourceRoot = $source; DriveId = $testDriveId; Account = $realConfig.Account; TenantId = $realConfig.TenantId
+        TargetType = $realConfig.TargetType; AuthMode = $realConfig.AuthMode
+        ClientId = $realConfig.ClientId; CertificateThumbprint = $realConfig.CertificateThumbprint
+        SiteId = $realConfig.SiteId; LibraryWebUrl = $realConfig.LibraryWebUrl
+    }
     $testConfig | ConvertTo-Json | Set-Content -LiteralPath $testConfigPath -Encoding UTF8
 
     $powerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'

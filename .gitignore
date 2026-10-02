@@ -4,3 +4,9 @@ work/
 *.log
 state.json
 config.json
+dist/
+OneDriveSyncMonitorTray.exe
+Build-AppIcon.exe
+OneDriveSyncMonitor.ico
+*preview.png
+graphify-out/

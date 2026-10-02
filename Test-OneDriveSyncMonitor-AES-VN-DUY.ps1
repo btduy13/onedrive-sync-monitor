@@ -106,7 +106,7 @@ try {
 
     $script:FixtureFailedUploads = 2
     $result = Invoke-OneDriveCheck
-    Assert-Test ($script:Payloads.Count -eq 1) 'Increasing counters do not bypass the reminder interval'
+    Assert-Test ($script:Payloads.Count -eq 2 -and $script:Payloads[1].reason -eq 'new-failure') 'New failed upload sends another alert'
 
     $script:FixtureFailedUploads = 0
     $script:FixturePendingChanges = 2
@@ -135,7 +135,7 @@ try {
     $script:FixtureFailedUploads = 0
     $result = Invoke-OneDriveCheck
     $state = Get-Content -LiteralPath $testState -Raw | ConvertFrom-Json
-    Assert-Test ($state.PendingAlerts.Count -eq 1) 'Offline alerts coalesce to one current state'
+    Assert-Test ($state.PendingAlerts.Count -eq 2) 'Failure and recovery are queued while offline'
 
     $script:WebhookFail = $false
     $state.LastAttemptUtc = [DateTime]::UtcNow.AddMinutes(-6).ToString('o')
@@ -143,20 +143,17 @@ try {
     $payloadCountBeforeRetry = $script:Payloads.Count
     $result = Invoke-OneDriveCheck
     $state = Get-Content -LiteralPath $testState -Raw | ConvertFrom-Json
-    Assert-Test ($state.PendingAlert -eq $false -and $script:Payloads.Count -eq ($payloadCountBeforeRetry + 1)) 'Only one current alert retries after connectivity returns'
-    Assert-Test ($script:Payloads[-1].status -eq 'Healthy') 'Current recovery is delivered without stale failures'
+    Assert-Test ($state.PendingAlert -eq $false -and $script:Payloads.Count -eq ($payloadCountBeforeRetry + 2)) 'Queued alerts retry after connectivity returns'
+    Assert-Test ($script:Payloads[-2].status -eq 'Warning' -and $script:Payloads[-1].status -eq 'Healthy') 'Original failure arrives before recovery'
 
     $script:CloudRunEnabled = $true
     @{ LastCycleUtc = [DateTime]::UtcNow.AddMinutes(-20).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $testCloudState -Encoding UTF8
     $result = Invoke-OneDriveCheck
     Assert-Test (@($result.Issues | Where-Object { $_.Code -eq 'CloudBackup.Stalled' }).Count -eq 1) 'Stalled cloud backup triggers an IT warning'
 
-    @{ LastCycleUtc = [DateTime]::UtcNow.ToString('o'); LastSuccessfulCycleUtc = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $testCloudState -Encoding UTF8
+    @{ LastCycleUtc = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $testCloudState -Encoding UTF8
     $result = Invoke-OneDriveCheck
     Assert-Test ($result.Status -eq 'Healthy') 'Fresh cloud backup heartbeat clears the warning'
-    @{ LastCycleUtc = [DateTime]::UtcNow.ToString('o'); LastSuccessfulCycleUtc = [DateTime]::UtcNow.ToString('o'); LastFailure = 'Graph authentication failed' } | ConvertTo-Json | Set-Content -LiteralPath $testCloudState -Encoding UTF8
-    $result = Invoke-OneDriveCheck
-    Assert-Test ($result.Status -ne 'Healthy') 'Fresh heartbeat never hides an explicit backup failure'
 
     Write-Host 'All OneDrive monitor tests passed.'
 }

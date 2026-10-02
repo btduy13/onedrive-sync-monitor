@@ -11,12 +11,18 @@ param(
     [string]$WebhookUrl = '',
     [switch]$Once,
     [switch]$LoadFunctionsOnly,
-    [switch]$TestAlert
+    [switch]$TestAlert,
+    [switch]$EnableItEmail,
+    [switch]$DisableItEmail
 )
 
 $ErrorActionPreference = 'Stop'
 $script:MonitorName = 'OneDriveSyncMonitor'
-$script:MonitorVersion = '1.1.0'
+$script:MonitorVersion = '1.2.0'
+$versionFile = Join-Path $PSScriptRoot 'version.json'
+if (Test-Path -LiteralPath $versionFile) {
+    try { $script:MonitorVersion = [string](Get-Content -LiteralPath $versionFile -Raw | ConvertFrom-Json).version } catch { }
+}
 $script:DefaultRepository = 'btduy13/onedrive-sync-monitor'
 $script:LastUpdateCheckUtc = [DateTime]::MinValue
 
@@ -81,6 +87,8 @@ function Get-MonitorConfig {
         StallMinutes            = $StallMinutes
         ReminderMinutes         = $ReminderMinutes
         AutoUpdateEnabled       = $true
+        NotifyItEmailEnabled    = $true
+        SafeRecoveryEnabled     = $true
         UpdateCheckHours        = 24
         Repository              = $script:DefaultRepository
     }
@@ -93,6 +101,8 @@ function Get-MonitorConfig {
             if ($null -ne $raw.ReminderMinutes) { $config.ReminderMinutes = [int]$raw.ReminderMinutes }
             if ($null -ne $raw.ComputerName) { $config.ComputerName = [string]$raw.ComputerName }
             if ($null -ne $raw.AutoUpdateEnabled) { $config.AutoUpdateEnabled = [bool]$raw.AutoUpdateEnabled }
+            if ($null -ne $raw.NotifyItEmailEnabled) { $config.NotifyItEmailEnabled = [bool]$raw.NotifyItEmailEnabled }
+            if ($null -ne $raw.SafeRecoveryEnabled) { $config.SafeRecoveryEnabled = [bool]$raw.SafeRecoveryEnabled }
             if ($null -ne $raw.UpdateCheckHours) { $config.UpdateCheckHours = [int]$raw.UpdateCheckHours }
             if ($null -ne $raw.Repository) { $config.Repository = [string]$raw.Repository }
             if (-not [string]::IsNullOrWhiteSpace([string]$raw.WebhookUrl)) {
@@ -114,6 +124,16 @@ function Get-MonitorConfig {
     if ($config.DiagnosticsStaleMinutes -lt 5) { $config.DiagnosticsStaleMinutes = 5 }
     if ($config.UpdateCheckHours -lt 1) { $config.UpdateCheckHours = 24 }
     return $config
+}
+
+if ($EnableItEmail -and $DisableItEmail) { throw 'Choose only one IT email setting.' }
+if ($EnableItEmail -or $DisableItEmail) {
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Monitor config is missing: $ConfigPath" }
+    $preference = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    $preference | Add-Member -NotePropertyName NotifyItEmailEnabled -NotePropertyValue ([bool]$EnableItEmail) -Force
+    $preference | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
+    Write-Host ("IT email notifications: " + $(if ($EnableItEmail) { 'enabled' } else { 'disabled' }))
+    return
 }
 
 function ConvertTo-MonitorVersion {
@@ -143,20 +163,44 @@ function Set-UpdateAttemptTime {
     $script:LastUpdateCheckUtc = [DateTime]::UtcNow
 }
 
+function Test-CertificateBackupConfigured {
+    param([Parameter(Mandatory = $true)][string]$MonitorConfigPath)
+    $cloudConfigPath = Join-Path (Split-Path -Parent $MonitorConfigPath) 'cloud-backup.json'
+    if (-not (Test-Path -LiteralPath $cloudConfigPath -PathType Leaf)) { return $false }
+    try {
+        $cloudConfig = Get-Content -LiteralPath $cloudConfigPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        return ($cloudConfig.AuthMode -eq 'Certificate')
+    }
+    catch {
+        # An unreadable cloud config may contain a certificate credential. Fail closed.
+        return $true
+    }
+}
+
+function Get-UpdateReleaseAssets {
+    param([Parameter(Mandatory = $true)]$Release,
+        [Parameter(Mandatory = $true)][Version]$ReleaseVersion)
+    $zipName = "OneDriveSyncMonitor-Setup-v$ReleaseVersion.zip"
+    $zip = @($Release.assets | Where-Object { $_.name -eq $zipName }) | Select-Object -First 1
+    $checksum = @($Release.assets | Where-Object { $_.name -eq ($zipName + '.sha256') }) | Select-Object -First 1
+    if ($null -eq $zip -or [string]::IsNullOrWhiteSpace([string]$zip.browser_download_url)) {
+        throw "Latest release does not contain $zipName."
+    }
+    if ($null -eq $checksum -or [string]::IsNullOrWhiteSpace([string]$checksum.browser_download_url)) {
+        throw "Latest release does not contain $zipName.sha256."
+    }
+    return [pscustomobject]@{ Zip = $zip; Checksum = $checksum }
+}
+
 function Start-ReleaseUpdate {
     param(
         [Parameter(Mandatory = $true)]$Release,
         [Parameter(Mandatory = $true)][string]$Repository,
         [Parameter(Mandatory = $true)][Version]$ReleaseVersion
     )
-    $asset = @($Release.assets | Where-Object { $_.name -eq 'OneDriveSyncMonitor-Setup.zip' }) | Select-Object -First 1
-    $checksumAsset = @($Release.assets | Where-Object { $_.name -eq 'OneDriveSyncMonitor-Setup.zip.sha256' }) | Select-Object -First 1
-    if ($null -eq $asset -or [string]::IsNullOrWhiteSpace([string]$asset.browser_download_url)) {
-        throw 'Latest release does not contain OneDriveSyncMonitor-Setup.zip.'
-    }
-    if ($null -eq $checksumAsset -or [string]::IsNullOrWhiteSpace([string]$checksumAsset.browser_download_url)) {
-        throw 'Latest release does not contain the ZIP checksum asset.'
-    }
+    $assets = Get-UpdateReleaseAssets -Release $Release -ReleaseVersion $ReleaseVersion
+    $asset = $assets.Zip
+    $checksumAsset = $assets.Checksum
 
     $checksumResponse = Invoke-WebRequest -Uri ([string]$checksumAsset.browser_download_url) -Headers @{ 'User-Agent' = $script:MonitorName } -UseBasicParsing -TimeoutSec 15
     $checksumText = if ($checksumResponse.Content -is [byte[]]) {
@@ -193,6 +237,10 @@ function Invoke-SelfUpdateCheck {
     $elapsedHours = ([DateTime]::UtcNow - $script:LastUpdateCheckUtc).TotalHours
     if ($script:LastUpdateCheckUtc -ne [DateTime]::MinValue -and $elapsedHours -lt $Config.UpdateCheckHours) { return $false }
     Set-UpdateAttemptTime
+    if (Test-CertificateBackupConfigured -MonitorConfigPath $ConfigPath) {
+        Write-MonitorLog 'WARN automatic code updates are disabled while certificate backup is configured; install only an IT-verified release.'
+        return $false
+    }
     try {
         $release = Get-LatestReleaseInfo -Repository ([string]$Config.Repository)
         $releaseVersion = ConvertTo-MonitorVersion -Tag ([string]$release.tag_name)
@@ -352,6 +400,7 @@ function Get-AccountSnapshot {
     $diagnosticsPath = Join-Path $logDirectory 'SyncDiagnostics.log'
     $diagnostics = @{}
     $diagnosticsExists = Test-Path -LiteralPath $diagnosticsPath
+    $diagnosticsReadable = $false
     $diagnosticsLastWriteUtc = [DateTime]::MinValue
 
     if ($diagnosticsExists) {
@@ -359,6 +408,7 @@ function Get-AccountSnapshot {
             $diagnosticsFile = Get-Item -LiteralPath $diagnosticsPath -ErrorAction Stop
             $diagnosticsLastWriteUtc = $diagnosticsFile.LastWriteTimeUtc
             $diagnostics = Read-KeyValueLog -Path $diagnosticsPath
+            $diagnosticsReadable = $diagnostics.ContainsKey('numLocalChanges') -and $diagnostics.ContainsKey('syncStallDetected')
         }
         catch {
             Write-MonitorLog "WARN cannot read $diagnosticsPath : $($_.Exception.Message)"
@@ -377,6 +427,7 @@ function Get-AccountSnapshot {
         RootExists            = (Test-Path -LiteralPath $Account.Root)
         DiagnosticsPath       = $diagnosticsPath
         DiagnosticsExists     = $diagnosticsExists
+        DiagnosticsReadable   = $diagnosticsReadable
         DiagnosticsAgeMinutes = $diagnosticsAge
         DiagnosticsUtc        = if ($diagnosticsExists) { (Get-DiagnosticsTimestampUtc -Diagnostics $diagnostics -FallbackUtc $diagnosticsLastWriteUtc).ToString('o') } else { $null }
         OnlineStatus          = [string](Get-RegistryPropertyValue -Properties $Account.Properties -Name 'GetOnlineStatus')
@@ -426,6 +477,9 @@ function Add-AccountIssues {
     }
     if (-not $Snapshot.DiagnosticsExists) {
         $Issues.Value += New-MonitorIssue -Code 'Account.DiagnosticsMissing' -Severity Warning -Account $Snapshot.Name -Message 'SyncDiagnostics.log is missing; OneDrive health cannot be verified.'
+    }
+    elseif ($Snapshot.DiagnosticsReadable -eq $false) {
+        $Issues.Value += New-MonitorIssue -Code 'Account.DiagnosticsUnreadable' -Severity Warning -Account $Snapshot.Name -Message 'Diagnostics cannot be read or validated; health is unknown.'
     }
     elseif ($null -ne $Snapshot.DiagnosticsAgeMinutes -and $Snapshot.DiagnosticsAgeMinutes -gt $StaleMinutes -and $Snapshot.Progress.PendingChanges -gt 0) {
         $Issues.Value += New-MonitorIssue -Code 'Account.DiagnosticsStale' -Severity Warning -Account $Snapshot.Name -Message "OneDrive diagnostics have not changed for $($Snapshot.DiagnosticsAgeMinutes) minutes."
@@ -523,7 +577,8 @@ function Send-WebhookAlert {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Url,
         [Parameter(Mandatory = $true)]$Result,
-        [Parameter(Mandatory = $true)][string]$Reason
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [bool]$SendItEmail = $true
     )
     if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
 
@@ -551,6 +606,7 @@ function Send-WebhookAlert {
         timestampLocal = $Result.TimestampLocal
         computer     = $Result.Computer
         recipient    = 'it@aspectengineering.com.au'
+        sendEmail    = $SendItEmail
         text         = $Result.Text
         user         = "$env:USERDOMAIN\$env:USERNAME"
         issues       = @($Result.Issues | ForEach-Object {
@@ -611,6 +667,12 @@ function Invoke-OneDriveCheck {
         try {
             if (-not (Test-Path -LiteralPath $CloudStatePath)) { throw 'Cloud backup state is missing.' }
             $cloudState = Get-Content -LiteralPath $CloudStatePath -Raw | ConvertFrom-Json
+            if ($cloudState.LastFailure) { throw ('Cloud backup failed: ' + [string]$cloudState.LastFailure) }
+            $lastSuccess = [DateTime]::MinValue
+            if (-not [DateTime]::TryParse([string]$cloudState.LastSuccessfulCycleUtc, [ref]$lastSuccess) -or
+                ([DateTime]::UtcNow - $lastSuccess.ToUniversalTime()).TotalMinutes -gt 15) {
+                throw 'Cloud backup has no recent successful cycle.'
+            }
             $lastCycle = [DateTime]::MinValue
             if (-not [DateTime]::TryParse([string]$cloudState.LastCycleUtc, [ref]$lastCycle) -or
                 ([DateTime]::UtcNow - $lastCycle.ToUniversalTime()).TotalMinutes -gt 15) {
@@ -622,6 +684,19 @@ function Invoke-OneDriveCheck {
         }
     }
 
+    $multiRun = Get-ItemProperty -Path $cloudRunKey -Name 'OneDriveMultiLibrarySync' -ErrorAction SilentlyContinue
+    if ($null -ne $multiRun -and $multiRun.OneDriveMultiLibrarySync) {
+        try {
+            $multiStatus = Get-Content -LiteralPath (Join-Path (Split-Path $CloudStatePath -Parent) 'libraries\status.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+            $lastMulti = [DateTime]::MinValue
+            if (-not [DateTime]::TryParse([string]$multiStatus.CheckedUtc,[ref]$lastMulti) -or ([DateTime]::UtcNow-$lastMulti.ToUniversalTime()).TotalMinutes -gt 15) { throw 'Multi-library supervisor has no recent completed cycle.' }
+            foreach ($library in @($multiStatus.Libraries)) {
+                if ($library.Status -ne 'Monitoring') {
+                    $issues += New-MonitorIssue -Code ('Library.'+[string]$library.Status) -Severity Warning -Account ([string]$library.Name) -Message ('Library needs attention: '+[string]$library.Status)
+                }
+            }
+        } catch { $issues += New-MonitorIssue -Code 'Library.SupervisorUnavailable' -Severity Warning -Message $_.Exception.Message }
+    }
     $status = Get-HealthStatus -Issues $issues
     $fingerprint = Get-IssueFingerprint -Issues $issues
     $timestampUtc = [DateTime]::UtcNow.ToString('o')
@@ -660,10 +735,6 @@ function Invoke-OneDriveCheck {
             $sendAlert = $true
             $reason = if ($status -eq 'Healthy') { 'recovered' } else { 'state-changed' }
         }
-        elseif ($newFailure) {
-            $sendAlert = $true
-            $reason = 'new-failure'
-        }
         elseif ($status -ne 'Healthy' -and $config.ReminderMinutes -gt 0 -and $state.LastAlertUtc) {
             $lastAlert = [DateTime]::MinValue
             if ([DateTime]::TryParse([string]$state.LastAlertUtc, [ref]$lastAlert)) {
@@ -680,12 +751,14 @@ function Invoke-OneDriveCheck {
     $lastAttemptUtc = if ($null -ne $state) { [string]$state.LastAttemptUtc } else { $null }
     $pendingAlerts = @()
     if ($null -ne $state -and $null -ne $state.PendingAlerts) { $pendingAlerts = @($state.PendingAlerts) }
+    # Keep only the latest undelivered state; never replay a backlog of stale incidents.
+    if ($pendingAlerts.Count -gt 0) { $pendingAlerts = @([pscustomobject]@{ Result = $result; Reason = 'latest-state' }) }
 
     if ($reason -eq 'reminder' -and @($pendingAlerts | Where-Object { $_.Result.Fingerprint -eq $fingerprint }).Count -gt 0) {
         $sendAlert = $false
     }
     if ($sendAlert) {
-        $pendingAlerts += [pscustomobject]@{ Result = $result; Reason = $reason }
+        $pendingAlerts = @([pscustomobject]@{ Result = $result; Reason = $reason })
         Write-MonitorLog "ALERT queued: status=$status, reason=$reason"
     }
 
@@ -702,7 +775,7 @@ function Invoke-OneDriveCheck {
         $remaining = @()
         for ($index = 0; $index -lt $pendingAlerts.Count; $index++) {
             $queued = $pendingAlerts[$index]
-            if (Send-WebhookAlert -Url ([string]$config.WebhookUrl) -Result $queued.Result -Reason ([string]$queued.Reason)) {
+            if (Send-WebhookAlert -Url ([string]$config.WebhookUrl) -Result $queued.Result -Reason ([string]$queued.Reason) -SendItEmail ([bool]$config.NotifyItEmailEnabled)) {
                 $lastAlertUtc = [DateTime]::UtcNow.ToString('o')
                 $lastDeliveredFingerprint = [string]$queued.Result.Fingerprint
             }
@@ -738,11 +811,43 @@ function Invoke-OneDriveCheck {
     return $result
 }
 
+function Invoke-SafeOneDriveRecovery {
+    param($Result, $Config)
+    if (-not $Config.SafeRecoveryEnabled -or -not (@($Result.Issues.Code) -contains 'Process.Stopped')) { return }
+    # Start only. Never reset, unlink, kill OneDrive or touch synchronized files.
+    $recoveryPath = Join-Path (Split-Path -Parent $StatePath) 'recovery-state.json'
+    if (Test-Path -LiteralPath $recoveryPath) {
+        $prior = Get-Content -LiteralPath $recoveryPath -Raw | ConvertFrom-Json
+        if (([DateTime]::UtcNow - ([DateTime]$prior.LastAttemptUtc).ToUniversalTime()).TotalMinutes -lt 30) { return }
+    }
+    $candidates = @((Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\OneDrive.exe'))
+    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($base) { $candidates += Join-Path $base 'Microsoft OneDrive\OneDrive.exe' }
+    }
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $signature = Get-AuthenticodeSignature -LiteralPath $candidate
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') { continue }
+        Ensure-ParentDirectory $recoveryPath
+        @{LastAttemptUtc=[DateTime]::UtcNow.ToString('o');Action='StartOnly';Path=$candidate} |
+            ConvertTo-Json | Set-Content -LiteralPath $recoveryPath -Encoding UTF8
+        Start-Process -FilePath $candidate -ArgumentList '/background' -WindowStyle Hidden -ErrorAction Stop | Out-Null
+        Write-MonitorLog 'RECOVERY requested OneDrive start; next monitor check must verify health. Cooldown 30 minutes.'
+        return
+    }
+    Write-MonitorLog 'RECOVERY skipped: no trusted Microsoft-signed OneDrive executable found.'
+}
+
 if ($LoadFunctionsOnly) { return }
 
 if ($TestAlert) {
     $testConfig = Get-MonitorConfig
     if ([string]::IsNullOrWhiteSpace([string]$testConfig.WebhookUrl)) { throw 'A webhook URL is required for -TestAlert.' }
+    $testUri = $null
+    if (-not [Uri]::TryCreate([string]$testConfig.WebhookUrl, [UriKind]::Absolute, [ref]$testUri) -or
+        $testUri.Scheme -ne [Uri]::UriSchemeHttps -or [string]::IsNullOrWhiteSpace($testUri.Host)) {
+        throw 'The saved webhook URL is invalid. Re-enter the complete HTTPS URL from the Power Automate flow.'
+    }
     $testComputer = if ([string]::IsNullOrWhiteSpace([string]$testConfig.ComputerName)) { $env:COMPUTERNAME } else { [string]$testConfig.ComputerName }
     $testTime = [DateTime]::UtcNow.ToString('o')
     $testLocalTime = [DateTimeOffset]::Now.ToString('yyyy-MM-dd HH:mm:ss zzz')
@@ -755,7 +860,7 @@ if ($TestAlert) {
         Issues = @()
         Accounts = @()
     }
-    if (-not (Send-WebhookAlert -Url ([string]$testConfig.WebhookUrl) -Result $testResult -Reason 'test')) { throw 'Test alert could not be delivered. Check monitor.log.' }
+    if (-not (Send-WebhookAlert -Url ([string]$testConfig.WebhookUrl) -Result $testResult -Reason 'test' -SendItEmail ([bool]$testConfig.NotifyItEmailEnabled))) { throw 'Test alert could not be delivered. Check monitor.log.' }
     Write-Host "Test alert sent for $testComputer"
     return
 }
@@ -768,7 +873,8 @@ if ($Once) {
 
 while ($true) {
     try {
-        Invoke-OneDriveCheck | Out-Null
+        $check = Invoke-OneDriveCheck
+        Invoke-SafeOneDriveRecovery -Result $check -Config (Get-MonitorConfig)
         if (Invoke-SelfUpdateCheck -Config (Get-MonitorConfig)) { break }
     }
     catch {

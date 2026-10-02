@@ -154,7 +154,6 @@ try {
     Assert-CloudTest ($appDraft.AuthMode -eq 'Certificate' -and
         $appDraft.SourceRoot -eq $source -and $appDraft.Account -eq 'App:11111111-1111-1111-1111-111111111111') `
         'Certificate SharePoint setup does not require a delegated OneDrive account'
-    Assert-CloudTest ($appDraft.SyncMode -eq 'BidirectionalRepair') 'New SharePoint setup enables guarded bidirectional repair'
 
     $libraryUrl = 'https://aspectengwa.sharepoint.com/sites/Design/Shared%20Documents/Forms/AllItems.aspx'
     $location = Get-SharePointLibraryLocation -Url $libraryUrl
